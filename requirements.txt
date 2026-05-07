@@ -1,0 +1,11 @@
+fastapi 
+uvicorn 
+jinja2
+langchain
+langchain-community
+langchain-groq
+chromadb
+sentence-transformers
+langchain_core
+pandas
+python-dotenv
