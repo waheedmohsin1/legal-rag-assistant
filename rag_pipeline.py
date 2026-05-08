@@ -55,8 +55,8 @@ def create_hierarchy(row):
     if row["heading_2"].strip():
         hierarchy.append(row["heading_2"].strip())
 
-    if row["heading_3"].strip():
-        hierarchy.append(row["heading_3"].strip())
+    # if row["heading_3"].strip():
+    #     hierarchy.append(row["heading_3"].strip())
 
     return " > ".join(hierarchy)
 
@@ -66,6 +66,10 @@ df["hierarchy_key"] = df.apply(
     axis=1
 )
 
+print("\nHierarchy Created")
+
+
+
 print('Hierarchy Created')
 
 # =========================================================
@@ -73,93 +77,82 @@ print('Hierarchy Created')
 # =========================================================
 
 parent_documents = []
+child_documents = []
 
 grouped = df.groupby("hierarchy_key")
 
-for hierarchy_key, group_df in grouped:
-
-    combined_text = ""
-
-    for _, row in group_df.iterrows():
-
-        combined_text += f"""
-
-Subsection:
-{row.get('heading_4', '')}
-
-Nested Section:
-{row.get('heading_5', '')}
-
-Section Number:
-{row.get('sub_section_no', '')}
-
-Content:
-{row.get('text', '')}
-
-"""
-
-    parent_content = f"""
-
-Hierarchy:
-{hierarchy_key}
-
-{combined_text}
-
-"""
-
-    parent_id = str(uuid.uuid4())
-
-    doc = Document(
-
-        page_content=parent_content,
-
-        metadata={
-            "parent_id": parent_id,
-            "hierarchy_key": hierarchy_key
-        }
-    )
-
-    parent_documents.append(doc)
-
-
-# =========================================================
-# SPLITTER
-# =========================================================
-
-text_splitter = RecursiveCharacterTextSplitter(
-
-    chunk_size=700,
-    chunk_overlap=100,
-
+# CHAPTER SPLITTER (IMPORTANT)
+chapter_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=1000,
+    chunk_overlap=150,
     separators=[
-        "\nSection Number:",
-        "\nSubsection:",
         "\n\n",
         "\n",
-        ". ",
-        " "
+        ". "
     ]
 )
 
+for hierarchy_key, group_df in grouped:
 
-# =========================================================
-# FINAL CHUNKS
-# =========================================================
+    chapter_grouped = group_df.groupby("heading_2")
 
-final_docs = []
+    for chapter_name, chapter_df in chapter_grouped:
 
-for doc in parent_documents:
+        # STEP 1: build full chapter text
+        chapter_text = ""
 
-    if len(doc.page_content) < 1200:
+        for _, row in chapter_df.iterrows():
+            chapter_text += row.get("text", "") + "\n\n"
 
-        final_docs.append(doc)
+        # STEP 2: split chapter into smaller chunks
+        chunks = chapter_splitter.split_text(chapter_text)
 
-    else:
+        parent_id = str(uuid.uuid4())
 
-        child_chunks = text_splitter.split_documents([doc])
+        # STEP 3: create ONE parent record (chapter-level metadata)
+        parent_documents.append(
+            Document(
+                page_content=f"""
+                    Hierarchy:
+                    {hierarchy_key}
 
-        final_docs.extend(child_chunks)
+                    Chapter:
+                    {chapter_name}
+                    """,
+                metadata={
+                    "parent_id": parent_id,
+                    "hierarchy_key": hierarchy_key,
+                    "chapter": chapter_name
+                }
+            )
+        )
 
+        # STEP 4: create child chunks (FOR VECTOR DB)
+        for i, chunk in enumerate(chunks):
+
+            child_documents.append(
+                Document(
+                    page_content=f"""
+                        Hierarchy:
+                        {hierarchy_key}
+
+                        Chapter:
+                        {chapter_name}
+
+                        Content:
+                        {chunk}
+""",
+                    metadata={
+                        "parent_id": parent_id,
+                        "hierarchy_key": hierarchy_key,
+                        "chapter": chapter_name,
+                        "chunk_id": i
+                    }
+                )
+            )
+
+print("Parents:", len(parent_documents))
+print("Children:", len(child_documents))
 
 # =========================================================
 # EMBEDDINGS
@@ -186,7 +179,7 @@ print('embedding_model Loaded')
 
 # vectordb = Chroma.from_documents(
 
-#     documents=final_docs,
+#     documents=child_documents,
 
 #     embedding=embedding_model,
 
@@ -224,56 +217,98 @@ print('LLM model loaded')
 # =========================================================
 def ask_question(question):
 
+    print("\n" + "=" * 80)
+    print("QUESTION:", question)
+    print("=" * 80)
+
     formatted_query = (
         "Represent this legal question for retrieving relevant passages: "
         + question
     )
 
-    # =========================================================
-    # TOP-K RETRIEVAL
-    # =========================================================
-
+    # =====================================================
+    # STEP 1: VECTOR SEARCH
+    # =====================================================
     results = vectordb.similarity_search_with_score(
         formatted_query,
         k=8
     )
 
-    # keep docs + scores (IMPORTANT FIX)
-    docs_with_scores = results
+    print("\nRETRIEVED DOCUMENTS\n")
 
-    # =========================================================
-    # BUILD STRUCTURED CONTEXT
-    # =========================================================
+    # =====================================================
+    # STEP 2: GROUP BY parent_id
+    # =====================================================
+    clusters = {}
 
-    context = ""
+    for doc, score in results:
 
-    docs = []
+        parent_id = doc.metadata.get("parent_id")
 
-    for i, (doc, score) in enumerate(docs_with_scores, 1):
+        if parent_id not in clusters:
+            clusters[parent_id] = {
+                "docs": [],
+                "score": 0
+            }
 
-        docs.append(doc)
+        clusters[parent_id]["docs"].append((doc, score))
 
-        context += f"""
-[Document {i}]
-Relevance Score: {score}
+        # accumulate score (lower is better for Chroma usually)
+        clusters[parent_id]["score"] += score
 
-Hierarchy: {doc.metadata.get("hierarchy_key", "")}
+        print("SCORE:", score)
+        print("HIERARCHY:", doc.metadata.get("hierarchy_key"))
+        print("-" * 50)
 
-Content:
-{doc.page_content}
+    # =====================================================
+    # STEP 3: SELECT BEST CLUSTER
+    # =====================================================
 
---------------------------------------
+    best_parent_id = min(
+        clusters.keys(),
+        key=lambda pid: clusters[pid]["score"]
+    )
 
-"""
+    selected_docs_with_scores = clusters[best_parent_id]["docs"]
 
-    # =========================================================
-    # CITATIONS (UNCHANGED BUT SAFE)
-    # =========================================================
+    # =====================================================
+    # STEP 4: LOCAL EXPANSION (OPTIONAL)
+    # =====================================================
+
+    selected_docs_with_scores.sort(key=lambda x: x[1])
+
+    final_docs = [doc for doc, _ in selected_docs_with_scores]
+
+    # OPTIONAL: limit context size (VERY IMPORTANT)
+    context_parts = []
+    total_length = 0
+    MAX_CONTEXT = 6000
+
+    for doc in final_docs:
+
+        text = doc.page_content
+
+        if total_length + len(text) > MAX_CONTEXT:
+            break
+
+        context_parts.append(text)
+        total_length += len(text)
+
+    context = "\n\n".join(context_parts)
+
+    print("\n" + "=" * 80)
+    print("CONTEXT SAMPLE")
+    print("=" * 80)
+    print(context[:3000])
+
+    # =====================================================
+    # STEP 5: CITATIONS
+    # =====================================================
 
     citations = []
     seen = set()
 
-    for doc in docs:
+    for doc, _ in selected_docs_with_scores:
 
         hierarchy = doc.metadata.get("hierarchy_key", "")
 
@@ -290,25 +325,24 @@ Content:
             "Sub_Section": parts[2] if len(parts) > 2 else ""
         })
 
-    # =========================================================
-    # STRONGER PROMPT (FORCES MULTI-DOC USAGE)
-    # =========================================================
+    # =====================================================
+    # STEP 6: PROMPT
+    # =====================================================
 
     prompt = f"""
 You are an AI legal assistant.
 
-You MUST use ALL provided documents to answer the question.
-Do not rely on only one passage.
-
-If multiple documents contain relevant information, combine them into a single structured answer.
+Answer ONLY from provided context.
 
 RULES:
 - Do NOT hallucinate
-- Do NOT use outside knowledge
-- If answer is not found, say:
+- Do NOT invent information
+- If answer unavailable say:
   "I could not find that information in the documents."
+- Keep answer concise
+- Mention legal sections when relevant
 
-CONTEXT DOCUMENTS:
+CONTEXT:
 {context}
 
 QUESTION:
@@ -317,13 +351,10 @@ QUESTION:
 ANSWER:
 """
 
-    # =========================================================
-    # LLM CALL
-    # =========================================================
-
     response = llm.invoke(prompt)
 
     return {
         "answer": response.content,
-        "citations": citations
+        "citations": citations,
+        "retrieved_docs": final_docs
     }
