@@ -41,5 +41,6 @@ GROQ_API_KEY='Your API KEY'
 # Vector DB
 Emebeddings created from csv data of first 500 rows
 You can create the whole document embeddings by commenting out df[:500] in rag_pipline.py
-Create 500 rows embeddings just to accelerate testing
+
+Created 500 rows embeddings just to accelerate testing
 
