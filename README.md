@@ -28,6 +28,8 @@ Semantic Retrieval
 LLM Response Generation
 
 # Setup
+
+// Install the required pakages from file
 uv add -r requirements.txt 
 
 run python app.py
