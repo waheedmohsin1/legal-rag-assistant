@@ -177,22 +177,23 @@ print('embedding_model Loaded')
 # VECTOR DB
 # =========================================================
 
-# vectordb = Chroma.from_documents(
+vectordb = Chroma.from_documents(
 
-#     documents=child_documents,
+    documents=child_documents,
 
-#     embedding=embedding_model,
+    embedding=embedding_model,
 
-#     persist_directory="vectordb/chroma_db"
-# )
-
-
-vectordb = Chroma(
-
-    persist_directory="vectordb/chroma_db",
-
-    embedding_function=embedding_model
+    persist_directory="vectordb/chroma_db"
 )
+                                       # ********************************************
+# If embeddings are created once then comment above code and uncomment below code
+                                       # **********************************************
+# vectordb = Chroma(
+
+#     persist_directory="vectordb/chroma_db",
+
+#     embedding_function=embedding_model
+# )
 
 print('Vector DB created')
 
