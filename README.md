@@ -28,5 +28,5 @@ Semantic Retrieval
 LLM Response Generation
 
 # Setup
-uv add -r requirements.txt
+uv add -r requirements.txt \n
 run python app.py
